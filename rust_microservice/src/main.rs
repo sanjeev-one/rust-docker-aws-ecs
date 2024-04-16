@@ -1,83 +1,90 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 use uuid::Uuid;
+use actix_web::http::StatusCode;
 
-#[derive(Serialize, Deserialize, Clone)]
+use std::env;
+
+
+
+
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 struct TodoItem {
     id: Uuid,
     description: String,
     completed: bool,
 }
 
-#[derive(Clone)]
 struct AppState {
-    todo_items: HashMap<Uuid, TodoItem>,
+    todo_items: Mutex<HashMap<Uuid, TodoItem>>,
 }
 
 impl AppState {
-    fn new() -> AppState {
+    pub fn new() -> Self {
         AppState {
-            todo_items: HashMap::new(),
+            todo_items: Mutex::new(HashMap::new()),
         }
     }
 
-    fn add_item(&mut self, item: TodoItem) {
-        self.todo_items.insert(item.id, item);
+    pub fn add_item(&self, item: TodoItem) {
+        let mut items = self.todo_items.lock().unwrap();
+        items.insert(item.id, item);
     }
 
-    fn get_item(&self, id: Uuid) -> Option<&TodoItem> {
-        self.todo_items.get(&id)
+    pub fn get_item(&self, id: Uuid) -> Option<TodoItem> {
+        let items = self.todo_items.lock().unwrap();
+        items.get(&id).cloned()
     }
 
-    fn remove_item(&mut self, id: Uuid) -> Option<TodoItem> {
-        self.todo_items.remove(&id)
+    pub fn remove_item(&self, id: Uuid) -> Option<TodoItem> {
+        let mut items = self.todo_items.lock().unwrap();
+        items.remove(&id)
     }
 
-    fn update_item(&mut self, id: Uuid, item: TodoItem) -> Option<TodoItem> {
-        self.todo_items.insert(id, item)
+    pub fn update_item(&self, id: Uuid, item: TodoItem) -> Option<TodoItem> {
+        let mut items = self.todo_items.lock().unwrap();
+        items.insert(id, item)
     }
 }
 
-async fn add_todo(data: web::Data<AppState>, item: web::Json<TodoItem>) -> impl Responder {
-    let mut state = data.into_inner();
+async fn add_todo(data: web::Data<Arc<AppState>>, item: web::Json<TodoItem>) -> impl Responder {
     let new_item = TodoItem {
         id: Uuid::new_v4(),
         description: item.description.clone(),
         completed: item.completed,
     };
 
-    state.add_item(new_item.clone());
+    data.add_item(new_item.clone());
     HttpResponse::Ok().json(new_item)
 }
 
-async fn get_todo(data: web::Data<AppState>, web::Path(id): web::Path<Uuid>) -> impl Responder {
-    let state = data.into_inner();
-    if let Some(item) = state.get_item(id) {
+async fn get_todo(data: web::Data<Arc<AppState>>, id: web::Path<Uuid>) -> impl Responder {
+    if let Some(item) = data.get_item(id.into_inner()) {
         HttpResponse::Ok().json(item)
     } else {
         HttpResponse::NotFound().finish()
     }
 }
 
-async fn delete_todo(data: web::Data<AppState>, web::Path(id): web::Path<Uuid>) -> impl Responder {
-    let mut state = data.into_inner();
-    if state.remove_item(id).is_some() {
+async fn delete_todo(data: web::Data<Arc<AppState>>, id: web::Path<Uuid>) -> impl Responder {
+    if data.remove_item(id.into_inner()).is_some() {
         HttpResponse::Ok().finish()
     } else {
         HttpResponse::NotFound().finish()
     }
 }
 
-async fn update_todo(data: web::Data<AppState>, web::Path(id): web::Path<Uuid>, item: web::Json<TodoItem>) -> impl Responder {
-    let mut state = data.into_inner();
+async fn update_todo(data: web::Data<Arc<AppState>>, id: web::Path<Uuid>, item: web::Json<TodoItem>) -> impl Responder {
     let updated_item = TodoItem {
-        id,
+        id: id.into_inner(), // Capture UUID once here
         description: item.description.clone(),
         completed: item.completed,
     };
 
-    if state.update_item(id, updated_item.clone()).is_some() {
+    if data.update_item(updated_item.id, updated_item.clone()).is_some() {
         HttpResponse::Ok().json(updated_item)
     } else {
         HttpResponse::NotFound().finish()
@@ -86,7 +93,10 @@ async fn update_todo(data: web::Data<AppState>, web::Path(id): web::Path<Uuid>, 
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    let app_state = web::Data::new(AppState::new());
+    let app_state = web::Data::new(Arc::new(AppState::new()));
+    std::env::set_var("RUST_LOG", "debug");
+
+    env_logger::init();
 
     HttpServer::new(move || {
         App::new()
@@ -96,7 +106,94 @@ async fn main() -> std::io::Result<()> {
             .route("/todos/{id}", web::delete().to(delete_todo))
             .route("/todos/{id}", web::put().to(update_todo))
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind("127.0.0.1:8080")?
     .run()
     .await
 }
+
+
+
+
+
+
+
+
+// tests:
+
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use actix_web::{test, web, App, http::StatusCode};
+
+    #[actix_rt::test]
+    async fn test_add_todo() {
+        env::set_var("RUST_LOG", "debug");
+env_logger::init(); 
+        let app = test::init_service(
+            App::new()
+                .data(web::Data::new(AppState::new()))
+                .route("/todos", web::post().to(add_todo))
+        ).await;
+    
+        let new_todo = TodoItem {
+            id: Uuid::new_v4(),
+            description: "Integration test todo".to_string(),
+            completed: false,
+        };
+    
+        let req = test::TestRequest::post()
+            .uri("/todos")
+            .set_json(&new_todo)
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+    
+        // First check the status before consuming the response
+        assert_eq!(resp.status(), StatusCode::OK, "Expected OK but got {}", resp.status());
+    
+        // Then read the response body if needed (this consumes resp)
+        let body = test::read_body(resp).await;
+        println!("Response body: {:?}", std::str::from_utf8(&body));
+    }
+    
+
+    #[actix_rt::test]
+    async fn test_get_todo() {
+        let data = web::Data::new(AppState::new());
+        let test_item = TodoItem {
+            id: Uuid::new_v4(),
+            description: "Test get todo".to_string(),
+            completed: true,
+        };
+
+        data.add_item(test_item.clone());
+        let app = test::init_service(
+            App::new()
+                .app_data(data.clone())
+                .route("/todos/{id}", web::get().to(get_todo))
+        ).await;
+
+        let req = test::TestRequest::get()
+            .uri(&format!("/todos/{}", test_item.id))
+            .to_request();
+        let resp = test::call_service(&app, req).await;
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp_item: TodoItem = test::read_body_json(resp).await;
+        assert_eq!(resp_item, test_item);
+    }
+
+    #[actix_rt::test]
+    async fn test_delete_todo() {
+        let data = web::Data::new(AppState::new());
+        let test_item = TodoItem {
+            id: Uuid::new_v4(),
+            description: "Test delete todo".to_string(),
+            completed: false,
+        };
+
+        data.add_item(test_item.clone());
+        let app = test::init_service(App::new()).await;
+
+
+}}
