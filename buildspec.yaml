@@ -3,6 +3,7 @@ version: 0.2
 phases:
   pre_build:
     commands:
+      - cd rust_microservice
       - docker build -t rust-web-service1
  .
   build:
