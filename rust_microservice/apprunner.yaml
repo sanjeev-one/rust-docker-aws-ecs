@@ -1,0 +1,5 @@
+version: 1.0
+runtime: provided
+build:
+  commands:
+    build: docker build -t rust_webservice .
