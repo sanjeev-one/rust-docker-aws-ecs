@@ -1,0 +1,11 @@
+version: 0.2
+
+phases:
+  pre_build:
+    commands:
+      - docker build -t rust-web-service1
+ .
+  build:
+    commands:
+      - docker images
+      - docker run -p 8080:8080 rust-web-service1
