@@ -1,11 +1,16 @@
-use actix_web::{web, App, HttpServer, Responder, HttpResponse};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 
-async fn welcome() -> impl Responder {
-    HttpResponse::Ok().body("Welcome to our Rust API!")
+async fn greet() -> impl Responder {
+    HttpResponse::Ok().body("Hello, IDS 721!")
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
-           
+            .route("/", web::get().to(greet))
+    })
+    .bind("0.0.0.0:8080")?
+    .run()
+    .await
+}

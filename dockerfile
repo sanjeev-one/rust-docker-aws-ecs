@@ -1,39 +1,29 @@
-# Stage 1: Build the application
-# Use a specific version of the Rust image to ensure compatibility
-FROM rust:1.58 as builder
+# Use an official Rust image
+FROM rust:1.62 as builder
 
 # Create a new empty shell project
-WORKDIR /usr/src/myapp
+RUN USER=root cargo new --bin app
+WORKDIR /app
 
-# Copy the Cargo.toml and Cargo.lock to cache the dependencies
-COPY ./Cargo.toml ./Cargo.lock ./
+# Copy our manifests
+COPY ./Cargo.toml ./Cargo.toml
 
-# This step ensures that your dependencies are cached, speeding up subsequent builds
-RUN mkdir src/ && \
-    echo "fn main() {println!(\"if you see this, the build broke\")}" > src/main.rs && \
-    cargo build --release && \
-    cargo clean -p myapp
+# This build step will cache your dependencies
+RUN cargo build --release
+RUN rm src/*.rs
 
-# Now copy your actual source code files into the image
+# Copy our source code
 COPY ./src ./src
 
-# Build your application for release
+# Build for release
+RUN rm ./target/release/deps/rust_microservice*
 RUN cargo build --release
 
-# Stage 2: Setup the runtime environment
-# Use a minimal Debian-based image with only the essentials
+# Final base
 FROM debian:buster-slim
 
-# Install SSL certificates (necessary for many web applications)
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Copy the build artifact from the build stage and set the working directory
+COPY --from=builder /app/target/release/rust_microservice .
 
-# Copy the built executable from the builder stage
-COPY --from=builder /usr/src/myapp/target/release/rust_microservice /usr/local/bin/rust_microservice
-
-# Expose the port the server is listening on
-EXPOSE 8080
-
-# Command to run the executable
-CMD ["rust_microservice"]
+# Set the CMD to your binary
+CMD ["./rust_microservice"]
